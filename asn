@@ -1,0 +1,90 @@
+#!/bin/bash
+
+#select name [ in word ] ; do list ; done
+#  The list of words following in is expanded, generating a list of items.  The set of expanded words is printed on the standard error, each preceded by a
+#  number.   If  the  in  word is omitted, the positional parameters are printed (see PARAMETERS below).  The PS3 prompt is then displayed and a line read
+#  from the standard input.  If the line consists of a number corresponding to one of the displayed words, then the value of name is set to that word.  If
+#  the  line  is  empty,  the words and prompt are displayed again.  If EOF is read, the command completes.  Any other value read causes name to be set to
+#  null.  The line read is saved in the variable REPLY.  The list is executed after each selection until a break command is executed.  The exit status  of
+#  select is the exit status of the last command executed in list, or zero if no commands were executed.
+
+echo "Choose what action you want to do."
+echo "Press <ENTER> for a re-list or press q to exit."
+
+select option in "Toon help" "Rebuild from source" "Build bind files" "Build rbldnsd files" "Build country files" "Edit/Create source AS file" "Check ip in rbl lists" "Combine ASN sources"
+do
+    echo "Choose what action you want to do."
+    echo "Press <ENTER> for a re-list or press q to exit."
+    case $REPLY in
+	1) . /etc/ASN/asn.conf f bind rbldnsd; set | grep "^ASN_\|^BIND_\|^RBLDNSD_";;
+	2) ./asnbuild;;
+	3) ./asn2bind;;
+	4) ./asn2rbldnsd;;
+	5) ./countrytodns;;
+	6) read -p "Enter AS number: " asnumber
+	    case $asnumber in
+	        ''|*[!0-9]*) echo "Only numbers"
+	        ;;
+		* ) echo "AS$asnumber"
+			. ./asn.conf
+			[ ! -f $ASN_SOURCE/AS$asnumber ] && read -p "AS$asnumber doesn't exist. Create (y/N): " yn
+			[ ! "${yn,,}" = "n" ] && mcedit $ASN_SOURCE/AS$asnumber
+		;;
+	    esac
+	;;
+	7) read -p "Enter valid ip number: " ipcheck
+	    . ./asn.conf f
+	    is_ip $ipcheck
+	    RETVAL=$?
+	    echo $RETVAL
+	    case $RETVAL in
+		4|6) echo "Valid ip."
+			case $RETVAL in
+			    4) echo -n "IPv4:$ipcheck "
+				rip=$(reverse_ipv4 $ipcheck)
+				echo "Reversed: $rip"
+			;;
+			    6) echo -n "IPv6:$ipcheck "
+				rip=$(reverse_ipv6 $ipcheck)
+				echo "Reversed: $rip"
+			;;
+			esac
+			echo "Test dnsbl $(dig +short txt $rip.dnsbl.lingeek.nl)"
+			echo "Test dnswl $(dig +short txt $rip.dnswl.lingeek.nl)"
+			echo "Test asn $(dig +short txt $rip.asn.lingeek.nl)"
+			echo "Test aspath $(dig +short txt $rip.aspath.lingeek.nl)"
+			echo "Test country $(dig +short txt $rip.country.lingeek.nl)"
+		;;
+		1) echo "No valid ip number.";;
+		*) echo $?;;
+	    esac
+	;;
+	8)  # Make my own mktemp to store in memory instead on disk. Speed thinks up.
+	    # Only works if you have enough RAM available.
+	    tmpdir=$(mktemp -d /dev/shm/asncombi-XXXXXXXX)
+	    # Define a trap if there is something wrong or script ends. Making sure nothing is left behind.
+	    trap "rm -rf $tmpdir; exit" 0 1 2 3 15
+#	    echo "Copying exsting AS numbers to $tmpdir"
+#	    time {
+#	    cp -fp /etc/ASN/source/AS* $tmpdir
+#	    }
+	    echo "Combining with known bgp numbers to $tmpfile"
+	    time {
+	    find /etc/ASN/source -maxdepth 1 -size 0 -type f -name "AS*" -printf "%f\n" | xargs -I '{}' cp /etc/ASN/bgp/'{}' -t $tmpdir
+	    }
+	    #find /etc/ASN/source -name AS* -maxdepth 0 -size 0 | xargs -I '{}' cp -un -t /mnt/sda4-extra /etc/ASN/bgp/'{}'
+	    #find /etc/ASN/source -name AS* -maxdepth 0 -size +200 | xargs -I '{}' cp -un -t /mnt/sda4-extra /etc/ASN/source/'{}'
+	    echo "Moving from $tmpfile to /mnt/sda4-extra/work dir"
+	    time {
+	    mv -fp $tmpdir/AS* /mnt/sda4-extra/ASN/work
+	    }
+	    echo "Removing $tmpdir"
+	    rmdir -rf $tmpdir
+	;;
+    esac
+    case $REPLY in
+	q|Q) exit 0;;
+    esac
+done
+
+echo "END"
