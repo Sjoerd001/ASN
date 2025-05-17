@@ -1,0 +1,160 @@
+#!/bin/bash
+
+DEBUG="1"
+
+ASTABLE="/etc/ASN/table.txt"
+#ASTABLE="/etc/ASN/table.test"
+ASNS="/etc/ASN/asns.txt"
+#ASNS="/etc/ASN/asns.test"
+
+# Create work file and remove extra spaces
+#cp -f /etc/ASN/asns.csv /etc/ASN/asns.txt
+cat /etc/ASN/asns.csv | tr -s ' ' > /etc/ASN/asns.txt
+
+# Remove first line from asns.txt
+sed -i '1,1d' /etc/ASN/asns.txt
+
+# Remove last 2 lines from same file
+sed -i -n -e :a -e '1,2!{P;N;D;};N;ba' /etc/ASN/asns.txt
+
+# Merge asns.unknown manual addition to asns.txt
+cat /etc/ASN/asns.unknown >> /etc/ASN/asns.txt
+# Also copy and modify cdn.csv to asns list
+cp -f /etc/ASN/cdn.csv /etc/ASN/cdn.txt
+cat -E /etc/ASN/cdn.txt | sed 's/"//g;s/\$/,\@\@/g' >> /etc/ASN/asns.txt
+
+
+# Remove all " inline
+sed -i 's/"//g' /etc/ASN/asns.txt
+# Remove double , inline
+sed -i 's/,,/,/g' /etc/ASN/asns.txt
+
+# Remove ERR_AS_NAME_NOT_FOUND lines
+#sed -i '/ERR_AS_NAME_NOT_FOUND/d' /etc/ASN/asns.txt
+
+
+# Reduce the info we want to use
+for i in "Unknown," "Eyeball," "Content," "Carrier," "T1,"; do
+sed -i 's/'$i'//g' /etc/ASN/asns.txt
+done
+
+# Add @@ at end for missing/unknown country codes
+sed -i 's/,$/,\@\@/g' /etc/ASN/asns.txt
+
+# Remove duplicates
+sort -i -u -t',' -k1V /etc/ASN/asns.txt
+sed -i '/.@@/d' /etc/ASN/asns.txt
+
+# Merge asns.unknown manual addition to asns.txt
+#cat /etc/ASN/asns.unknown >> /etc/ASN/asns.txt
+
+#exit
+
+declare -A test infolines counter
+
+mk_temp() {
+    echo `mktemp -p $tmpdir`
+    return $?
+}
+
+__iptest() {
+    [ $DEBUG ] && echo "Running ${FUNCNAME[@]}"
+    while read ip asnr; do
+# fields[0] contains ip address
+# fields[1] contains as number
+#    echo ${fields[@]}
+#    echo "(${#test[*]})${fields[1]} == ${fields[0]}"
+	test[$asnr]+="$ip "
+	((counter[$asnr]++))
+#	echo "$asnr: ${counter[$asnr]} ==> $ip"
+#    echo ${test[${fields[1]}]}
+    done < $ASTABLE
+#    echo "counter: ${#counter[@]} test:${#test[@]}"
+}
+
+t_loadasninfo() {
+    [ $DEBUG ] && echo "Running ${FUNCNAME[@]}"
+    while IFS=, read asns provider; do
+	asnr=${asns[0]:2}
+	echo "AS:$asnr"
+	((counter["ASINFO"]++))
+	comment=${provider::-3}
+	country=${provider: -2}
+	infolines[$asnr]="AS$asnr - $comment, $country"
+    done < $ASNS
+}
+
+__loadasninfo() {
+    [ $DEBUG ] && echo "Running ${FUNCNAME[@]}"
+#    test='AS1,"Level 3 Parent, LLC",Unknown,US'; echo $test | sed -n 1'p' | tr ',' '\n' | while read word; do printf "Word='%s'\n" "${word}"; done
+#    local asnnr field1 field2 field3 field4
+#    IFS=, read -r -a test <<< 'AS1,"Level 3 Parent, LLC",Unknown,US'
+    IFS=,
+    while IFS=, read -a fields
+	do
+	    asnr=${fields[0]:2}
+	    ((counter["TOTAL"]++))
+	    if [ "${#fields[@]}" = "3" ]; then
+		infolines["$asnr"]="AS$asnr - ${fields[1]}, ${fields[2]}"
+#		echo "${infolines["$asnr"]}"
+	    else
+		infolines["$asnr"]=$(echo -e "AS$asnr - ${fields[1]},${fields[2]}, ${fields[3]}" | tr -s ' ')
+#		echo "${infolines["$asnr"]}"
+	    fi
+	done < $ASNS
+}
+
+
+[ $DEBUG ] && echo "Running ${FUNCNAME[@]}"
+__iptest
+t_loadasninfo
+unset IFS
+
+cat /etc/ASN/asns.txt | sort -t',' -k1V | uniq -f0 -D > duplicates-D.txt
+cat /etc/ASN/asns.txt | sort -t',' -k1V | uniq -f0 -d > duplicates-d.txt
+
+#exit
+
+# Make my own mktemp to store in memory instead on disk. Speed thinks up.
+# Only works if you have enough RAM available.
+tmpdir=$(mktemp -d /dev/shm/bgp-XXXXXXXX)
+trap "rm -rf $tmpdir" 0 1 2 3 15
+# Trap deletes $tmpdir on script exit with specified bash exit codes 0 1 2 3 15
+TEMPDIR=$tmpdir
+TMPDIR=$tmpdir
+
+
+#exit
+teller=0
+echo "Total: ${#test[@]}"
+
+# Create my own temp file
+#bgpasn=$(mk_temp)
+
+for j in ${!test[@]}; do
+    ((teller++))
+    # printf "%-12s%s\n"
+    printf "(%s/%s) IP's: %s Creating: AS%s Total AS info:%s                                                                     \x1B[0G" $teller ${#test[@]} ${counter[$j]} $j ${counter["ASINFO"]}
+    #/mnt/sda4-extra/AS$j
+cat<<EOF>$tmpdir/AS$j
+Informations for ${infolines[$j]}
+$(for i in ${test[$j]}; do echo $i; done | wc -l) Networks are assigned to you.
+Networks of your Allocation
+$(for i in ${test[$j]}; do echo $i; done)
+EOF
+#    echo "Processing: $j"
+#    for i in ${test[$j]}; do
+#	echo $i
+done
+
+# mv - Need something else: /usr/bin/mv: Argument list too longo:116885
+#mv -f $tmpdir/AS* /etc/ASN/bgp
+time find $tmpdir -name "AS*" | xargs cp -fp -t /etc/ASN/bgp --
+
+# Some cleanup
+rm -rf $tmpdir
+
+# End of script
+echo "Creating MD5-sum file:"
+find AS* -type f -exec md5sum "{}" + > checklist.chk
+echo "All done...."
