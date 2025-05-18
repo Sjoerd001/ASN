@@ -1,0 +1,192 @@
+#!/bin/bash
+
+echo ${1+"$@"}
+
+
+#Give tempory work folder
+TFtemp="/dev/shm"
+
+[ -f /etc/ASN/asn.conf ] && . /etc/ASN/asn.conf
+
+echo $debug
+echo $ASN_TEMP
+echo $ASN_BASE
+echo $ASN_SOURCE
+echo $ASN_TPL
+echo $ASN_TABLE
+echo $ASN_PROVIDER
+echo $ASN_BIN
+echo $ASN_WHOIS
+echo $ASN_COUNTRY
+
+cv4codes=`find $ASN_COUNTRY/ip4 -maxdepth 1 -type f -size +10c -name "??.zone" -exec basename \{} \; | sed 's/.zone//'`
+cv6codes=`find $ASN_COUNTRY/ip6 -maxdepth 1 -type f -size +10c -name "??.zone" -exec basename \{} \; | sed 's/.zone//'`
+
+echo $cv4codes
+echo $cv6codes
+
+#exit
+
+# Remove spaces between text and tabs
+sed -i 's/\ \t/\t/g' ./test.simple
+#s/\[.*\]//;s/\ \t/\t/g' ./test.simple
+
+#Country	Alpha-2	Alpha-3	Numeric
+
+declare -A arraycodes
+
+while IFS=$'\t' read -r country alpha2 alpha3 numeric langa2 langa3 subdivision ccTLD description
+do
+    if ! [ ${country:0:1} == ";" ]; then
+	#country=$(echo ${country}|tr -s ' ')
+	#alpha2=$(echo ${alpha2^^}|tr -s ' ')
+	#alpha3=$(echo ${alpha3^^}|tr -s ' ')
+	#numeric=$(echo $numeric|tr -s ' ')
+	#langa2=
+	#langa3=
+	#description=$(echo $description|tr -s ' ')
+#	echo "country:${#alpha2} name:${#country}"
+	echo "Alpha2:$alpha2 Alpha3:$alpha3 Country:$country Numeric:$numeric Langa2:$langa2 Langa3:$langa3 Subdiv:$subdivision ccTLD:$ccTLD Description:$description"
+	arraycodes["$alpha2","country"]="$country"
+	arraycodes["$alpha2","alpha2"]="$alpha2"
+	arraycodes["$alpha2","alpha3"]="$alpha3"
+	arraycodes["$alpha2","numeric"]="$numeric"
+	arraycodes["$alpha2","langa2"]="$langa2"
+	arraycodes["$alpha2","langa3"]="$langa3"
+	arraycodes["$alpha2","subdivision"]="$subdivision"
+	arraycodes["$alpha2","ccTLD"]="$ccTLD"
+	arraycodes["$alpha2","description"]="$description"
+	#echo "Alpha-2:${arraycodes[$alpha2,2]} Country:${arraycodes[$alpha2,1]} Alpha-3:${arraycodes[$alpha2,3]} Numeric:${arraycodes[$alpha2,4]}"
+	#echo ${arraycodes[1]}" = "${arraycodes[0]}
+    else
+	echo "$country Discarded line"
+    fi
+
+done < ./test.simple
+
+#array=($ccodeslist)
+#ccodeslist=$(cat ./country.list)
+
+#for i in "${!arraycodes[@]}"
+#do
+#    printf "%s\t%s\n" $i "${arraycodes["$i"]}"
+#done
+
+
+#echo $ccodeslist[@]
+
+#exit
+
+
+# Make my own mktemp to store in memory instead on disk. Speed thinks up.
+# Only works if you have enough RAM available.
+tmpdir=$(mktemp -d $ASN_TEMP/country-XXXXXXXX)
+# Define a trap if there is something wrong or script ends. Making sure nothing is left behind.
+trap "rm -rf $tmpdir; exit" 0 1 2 3 15
+
+cat<<EOF>$ASN_ZONES/rbldnsd/country/country.lingeek.nl.generic
+###################################################################################
+# country.lingeek.nl list (rbldnsd).
+###################################################################################
+\$SOA 600 country.lingeek.nl hostmaster.lingeek.nl $(date +%Y%m%d%S%M) 3600 3600 86400 120
+\$NS 600 ns.lingeek.nl 10.10.254.1 212.187.124.126
+###################################################################################
+@ TXT     "Usage: dig +short txt us.v4.country.lingeek.nl"
+@ TXT     "Replace v4 for v6 or just the country code for country-name"
+EOF
+
+totaal=${#cv4codes}
+teller=0
+
+for i in ${cv4codes^^}
+do
+    echo -e "$i TXT \"${arraycodes[$i,"country"]}\"" >> $ASN_ZONES/rbldnsd/country/country.lingeek.nl.generic
+done
+
+#echo "" >> $ASN_ZONES/rbldnsd/country/country.lingeek.nl.generic
+
+for i in ${cv4codes^^}
+do
+((teller++))
+#echo "Lengte:${#i}"
+#echo $(echo "Test: ${arraycodes[${i},"country"]}, ${i}" | cat -A)
+#    countryip=$(cat $ASN_COUNTRY/ip4/$i.zone | grep '[0-9]\.'|grep -v '[;]')
+#    echo "$i -> $countryip"
+#    for j in $countryip
+#    do
+#	CIP=$(echo $j | cut -d '/' -f1)
+#	CIDR=$(echo $j | cut -d '/' -f2)
+#	echo "Combined ip:${i^^}:$CIP/$CIDR"
+cat<<EOF>$tmpdir/$i.country.ip4.rbldnsd
+####################################################################
+\$0=${arraycodes[${i},"country"]}, ${i}
+####################################################################
+$(cat $ASN_COUNTRY/ip4/${i,,}.zone)
+EOF
+#    echo "IPv4 Parsing ($teller/$totaal) $i"
+#    /var/named/chroot/var/named/blacklists/ipv4.new $tmpdir/$i.bind.country.ip4.zone $ASN_ZONES/bind/country/$i.bind.country.ip4.zone
+    #sed -i '/^AQ/d;s/^999999.v4/'$i'.v4/;/999999/d' $ASN_ZONES/bind/country/$i.bind.country.ip4.zone
+#    done
+done
+#exit
+
+totaal=${#cv6codes}
+teller=0
+
+for i in ${cv6codes^^}
+do
+((teller++))
+#echo "Lengte:${#i}"
+#echo $(echo "Test: ${arraycodes[${i},"country"]}, ${i}" | cat -A)
+#    countryip=$(cat $ASN_COUNTRY/ip4/$i.zone | grep '[0-9]\.'|grep -v '[;]')
+#    echo "$i -> $countryip"
+#    for j in $countryip
+#    do
+#	CIP=$(echo $j | cut -d '/' -f1)
+#	CIDR=$(echo $j | cut -d '/' -f2)
+#	echo "Combined ip:${i^^}:$CIP/$CIDR"
+cat<<EOF>$tmpdir/$i.country.ip6.rbldnsd
+;#####################################################################
+EOF
+#$i.v6				IN	TXT	"${arraycodes[${i},"country"]}"
+#EOF
+    echo "IPv6 Parsing ($teller/$totaal) $i"
+    ip6teller=0
+    ip6totaal=$(cat $ASN_COUNTRY/ip6/${i,,}.zone|wc -l)
+    for j in $(cat $ASN_COUNTRY/ip6/${i,,}.zone)
+    do
+	((ip6teller++))
+	v6cidr=$(echo $j|cut -d'/' -f2)
+	#IPV6=$(echo $j|cut -d'/' -f1)
+	#v6ip=$(echo $j|sed 's/\/.*//')
+	#ipv6count=$(echo "2^(128-$v6cidr)"|bc -l)
+	#"
+	ipv6range=$(sipcalc $j) # | tail -n4 | cut -d'-' -f2 | awk '{$2=$2};1' | sed -e '/^.$/d;s/.$//')
+	ipv6start=$(echo $ipv6range| cut -d' ' -f44)
+	ipv6end=$(echo $ipv6range| cut -d' ' -f46)
+	echo -e -n "$ip6teller/$ip6totaal [ $j ]     \x1B[0G"
+	revipv6bind="*.$($ASN_BIN/revip $ipv6end | sed 's/[f.]*//;s/.ip6.arpa.//')"
+	#$ASN_BIN/revip $IPV6
+	echo "$i.v6 TXT \"$j\"" >> $tmpdir/$i.country.ip6.rbldnsd
+	#echo "$revipv6bind			IN	A	127.0.0.0" >> $tmpdir/$i.country.ip6.rbldnsd
+	echo "$i.v6 TXT \"$i - ${arraycodes[$i,"country"]} range ($j == $ipv6start - $ipv6end)\"" >> $tmpdir/$i.country.ip6.rbldnsd
+    done
+    echo
+    mv -f $tmpdir/$i.bind.country.ip6.zone $ASN_ZONES/bind/country/$i.country.ip6.rbldnsd
+    #sed -i '/^AQ/d;s/^999999.v4/'$i'.v4/;/999999/d' $ASN_ZONES/bind/country/$i.bind.country.ip4.zone
+#    done
+done
+
+# Freeze dynamic dns zone (Need root and properly configured bind keys)
+#rndc freeze country.lingeek.nl.
+
+cat $ASN_ZONES/rbldnsd/country/*.country.ip4.rbldnsd > $ASN_ZONES/rbldnsd/country/country4.rbldnsd
+cat $ASN_ZONES/rbldnsd/country/*.country.ip6.rbldnsd > $ASN_ZONES/rbldnsd/country/country6.rbldnsd
+
+chown dnsbl:dnsbl $ASN_ZONES/rbldnsd/country/country*.rbldnsd
+cp -p -u $ASN_ZONES/rbldnsd/country/country.lingeek.nl.rbldnsd /var/lib/rbldnsd/lingeek
+#chown named:named $ASN_ZONES/bind/country/country?.zone
+cp -p -u $ASN_ZONES/rbldnsd/country/country?.rbldnsd /var/lib/rbldnsd/lingeek
+
+# Reload dynamic dns zone
+#rndc thaw country.lingeek.nl.

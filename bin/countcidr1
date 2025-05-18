@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Function to convert an IPv4 address to binary
+ipv4_to_bin() {
+    IFS='.' read -r a b c d <<< "$1"
+    printf '%d.%d.%d.%d\n' $(echo "ibase=2;$a;$b;$c;$d" | bc | sed 's/.\{8\}/& /g')
+}
+
+# Function to convert an IPv6 address to binary
+ipv6_to_bin() {
+    printf '%s\n' $(echo "obase=2; $(printf "%s" "$1" | tr -d ':')" | bc | sed 's/.\{4\}/& /g')
+}
+
+# Function to calculate the CIDR notation for an IPv4 range
+calculate_ipv4_cidr() {
+    start_addr=$(ipv4_to_bin "$1")
+    end_addr=$(ipv4_to_bin "$2")
+
+    for i in {31..0}; do
+        mask=$((0xffffffff << (32 - $i)))
+        if (( $(($start_addr & $mask)) != $(($end_addr & $mask)) )); then
+            echo "$1-$2 is a /$i CIDR block for IPv4"
+            return
+        fi
+    done
+
+    echo "Invalid IPv4 range: $1-$2"
+}
+
+# Function to calculate the CIDR notation for an IPv6 range
+calculate_ipv6_cidr() {
+    start_addr=$(ipv6_to_bin "$1")
+    end_addr=$(ipv6_to_bin "$2")
+
+    for i in {127..0}; do
+        mask=$((0xffffffffffffffffffffffffffffffff << (128 - $i)))
+        if (( $(($start_addr & $mask)) != $(($end_addr & $mask)) )); then
+            echo "$1-$2 is a /$i CIDR block for IPv6"
+            return
+        fi
+    done
+
+    echo "Invalid IPv6 range: $1-$2"
+}
+
+# Main program
+if [[ $1 == "-4" ]]; then
+    calculate_ipv4_cidr "$2" "$3"
+elif [[ $1 == "-6" ]]; then
+    calculate_ipv6_cidr "$2" "$3"
+else
+    echo "Usage: $0 [-4 | -6] <start_addr> <end_addr>"
+fi

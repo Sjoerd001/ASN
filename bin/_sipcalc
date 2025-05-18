@@ -1,0 +1,10 @@
+#!/bin/bash
+
+[ "${#@}" = 0 ] && exit
+sipinfo=$(sipcalc "$1")
+# if ip address passed containing ':'
+if [[ $1 = *':'* ]]; then
+    echo $sipinfo|cut -d' ' -f44,46
+else
+    echo $sipinfo|cut -d' ' -f55,57
+fi

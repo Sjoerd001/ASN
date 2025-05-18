@@ -1,0 +1,346 @@
+#!/bin/bash
+
+# Source config
+. /etc/ASN/asn.conf
+
+# rbldnsd working dir. Need this for copying work files because
+# rbldnsd works on root dir and cant be linked.
+# (Feature option: mount bind files to working dir?)
+RBLDNSD_WORK_DIR=/var/lib/rbldnsd/lingeek
+
+# Default directory settings
+#ASN_DEBUG=0
+#ASN_TEMP="/dev/shm"
+#ASN_BASE=/etc/ASN
+#ASN_SOURCE=$ASN_BASE/source
+#ASN_TPL=$ASN_BASE/tpl
+#ASN_TABLE=$ASN_BASE/table
+#ASN_PROVIDER=$ASN_BASE/provider
+#ASN_BIN=$ASN_BASE/bin
+#ASN_WHOIS=$ASN_BASE/whois
+#ASN_COUNTRY=$ASN_BASE/country
+#ASN_ZONES=$ASN_BASE/zones
+
+# Tool for doing ip calculations
+# Bin file should only give start and end ipv6 range
+ipcalcbin=sipcalc
+
+# Source functions lib
+. $ASN_BASE/asnfunctions
+# Functions used:
+#_revip()               Calculate reverse ip address
+
+#Give tempory work folder
+TFtemp=$ASN_TEMP
+# "/dev/shm"
+
+# Where to find the table file
+sourcedir="/etc/ASN"
+# Where to put the zone files and templates
+#destdir=$sourcedir/zones/bind
+destdir=$sourcedir/zones/rbldnsd
+# ASN bin dir
+asnbin=$sourcedir/bin
+
+# If exist override the above defaults
+#[ -f /etc/ASN/asn.config ] &&. /etc/ASN/asn.config
+
+############### Start of actual script ############################################################
+
+pushd $(pwd)
+
+
+# Make my own mktemp to store in memory instead on disk. Speed thinks up.
+# Only works if you have enough RAM available.
+tmpdir=$(mktemp -d $TFtemp/zone-XXXXXXXX)
+# Define a trap if there is something wrong or script ends. Making sure nothing is left behind.
+trap "rm -rf $tmpdir; exit" 0 1 2 3 15
+
+#[ ! $1 ] && echo "No input file(s)." && exit
+asnnumbers=$@
+
+[ $# -eq 0 ] && asnnumbers=$(cat $sourcedir/table/AS.table | cut -d'|' -f1 | sed -e 's/\"AS//;s/.$//')
+
+asntotal=$(echo $asnnumbers|wc -w)
+
+cat<<EOF>$tmpdir/asn.lingeek.nl.generic
+########################################################################
+# asn.lingeek.nl ipv4/6 info zone  |  Totaal:$asntotal
+########################################################################
+EOF
+
+_getipv4()
+{
+    echo "$(</dev/stdin)" | grep -E -o '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | sort -V
+}
+
+_getipv6()
+{
+    echo "$(</dev/stdin)" | grep -E '(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]).){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]).){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))'
+}
+
+#time {
+
+ipv4total=0
+ipv6total=0
+asncount=0
+
+asnlevel=0
+
+echo "Aantal ASN to compute:$asntotal"
+
+for i in $asnnumbers; do
+    ((asncount++))
+
+    #echo -e "\n$destdir/AS$i rbldnsd doesnt exist"
+    asnfile="$sourcedir/tpl/AS$i.tpl"
+    declare -a infoline
+    mapfile -n 5 -t infoline < $asnfile
+    asnfile="$sourcedir/tpl/AS$i.tpl"
+    iplist=`grep -v ';' $asnfile|sed '/^$/d'`
+    ip4list=`grep -v ';' $asnfile|sed '/^$/d' | _getipv4`
+    ip6list=`grep -v ';' $asnfile|sed '/^$/d' | _getipv6`
+    provider=$(echo ${infoline[1]}|cut -d' ' -f4-)
+    provider=${provider%,*}
+
+    # Re-create providers ip list from AS number
+    echo -e "$i					IN	TXT	\"$provider\"" >> $tmpdir/asn.lingeek.nl.generic
+    for k in $ip4list
+    do
+	echo -e "$i.v4				IN	TXT	\"$k\"" >> $tmpdir/asn.lingeek.nl.generic
+    done
+
+    for k in $ip6list
+    do
+	echo -e "$i.v6				IN	TXT	\"$k\"" >> $tmpdir/asn.lingeek.nl.generic
+    done
+
+    # Test if AS number already have been processed
+    if ( test -f $destdir/AS$i.ipv4.rbldnsd ) && ( test -f $destdir/AS$i.ipv6.rbldnsd ); then
+	echo -e -n "($asncount/$asntotal) AS$i already done. Next AS number        \x1B[0G"
+    else
+	asn=$(set -- ${infoline[1]}; echo $2)
+#	echo "asn:$asn"
+	#networks=`grep 'Total of' $asnfile|cut -d' ' -f4` # sed '/^$/d' # |sed 's/^#/;#/'
+#	networks=`echo ${infoline[2]}|cut -d' ' -f4` # sed '/^$/d' # |sed 's/^#/;#/'
+	networks=$(set -- ${infoline[2]}; echo $4)
+#	echo "Networks:$networks"
+#	exit
+#	totv46=`grep 'IPv4:' $asnfile`
+#	totv4=`echo $totv46 | cut -d':' -f2|cut -d' ' -f1`
+#	totv6=`echo $totv46 | cut -d':' -f3`
+	totv4=$(IFS=' ' set -- ${infoline[3]}; echo ${2#*:})
+	totv6=$(IFS=' ' set -- ${infoline[3]}; echo ${3#*:})
+	totalipv4=+$totv4
+	totalipv6=+$toyv6
+#	echo "totv4: $totv4"
+#	echo "totv6: $totv6"
+#	exit
+	country=${infoline[1]: -2}
+#	asn=`echo ${infoline[1]} | cut -d' ' -f2`
+	echo -e "($asncount/$asntotal) AS:$i Networks:$networks v4:$totv4 v6:$totv6                          "
+
+#	if ! [ -f AS$i.rbldnsd.tpl ]; then
+#	cat<<EOF>$destdir/AS$i.rbldnsd.tpl
+#RANGE_TEXT AS$i - $provider, $country
+#@0
+#$(echo ${infoline[0]})
+#$(echo ${infoline[1]})
+#$(echo ${infoline[2]})
+#$(echo ${infoline[3]})
+#$(echo ${infoline[4]})
+#;country: $country
+#$iplist
+#EOF
+#	fi # End .tpl file generate
+
+	# Make ipv4 list (filter out ipv6 addresses)
+	if ! [ -f $destdir/AS$i.ipv4.rbldnsd ]; then #  && [ -n "$ip4list" ]; then
+	    cat<<EOF>"$tmpdir/AS$i.ipv4.rbldnsd"
+###################################################################
+# $country - AS$i - $provider  |  IPv4:$totv4
+###################################################################
+EOF
+	    if [ -n "$ip4list" ]; then
+		for l in $ip4list; do
+		    echo "$l $country - AS$i - $provider $l range ($(sipcalc $l | grep 'Network range' | cut -d'-' -f2-))" >> "$tmpdir/AS$i.ipv4.rbldnsd"
+		done
+	    fi
+	fi
+#	mv -f $tmpdir/AS$i.ipv4.rbldnsd $destdir/AS$i.ipv4.rbldnsd
+
+	# Make ipv6 list (filter out ipv4 addresses)
+	if ! [ -f $destdir/AS$i.ipv6.rbldnsd ]; then # && [ -n "$ip6list" ]; then
+	    cat<<EOF>"$tmpdir/AS$i.ipv6.rbldnsd"
+###################################################################
+# $country - AS$i - $provider  |  IPv6:$totv6
+###################################################################
+EOF
+	    if [ -n "$ip6list" ]; then
+		for l in $ip6list; do
+		    echo "$l $country - AS$i - $provider $l range $(v6range $l | head -n1 | cut -d'"' -f2- | tr -d '"')" >> "$tmpdir/AS$i.ipv6.rbldnsd"
+		done
+	    fi
+	fi
+
+#	cp -f $tmpdir/AS$i.ipv6.rbldnsd $destdir/AS$i.ipv6.rbldnsd
+
+	# Backup for testing
+#	cp -f $tmpdir/AS$i.ipv4.rbldnsd test.ipv4.rbldnsd
+#	cp -f $tmpdir/AS$i.ipv6.rbldnsd test.ipv6.rbldnsd
+
+    fi
+done
+	echo "Tempdir: $tmpdir"
+	if ! [ -z "$(ls -A -- "$tmpdir")" ]; then
+	    cp -f $tmpdir/* $destdir 2> /dev/null
+	fi
+	#( test -d $tmpdir ) && ( ls -1qA $tmpdir/AS*.rbldnsd | grep -q . ); then cp -f $tmpdir/* $destdir > dev/null; fi
+cat<<EOF>$destdir/asn4.rbldnsd
+###################################################################################
+# asn.lingeek.nl ipv4 list (rbldnsd). Total IPv4:$totalv4
+###################################################################################
+\$SOA 600 asn.lingeek.nl hostmaster.lingeek.nl $(date +%Y%m%d%H) 3600 3600 86400 120
+\$NS 600 ns.lingeek.nl
+###################################################################################
+$(cat $destdir/AS*.ipv4.rbldnsd)
+###################################################################################
+EOF
+
+cat<<EOF>$destdir/asn6.rbldnsd
+###################################################################################
+# asn.lingeek.nl ipv6 list (rbldnsd). Total IPv6:$totalv6
+###################################################################################
+\$SOA 600 asn.lingeek.nl hostmaster.lingeek.nl $(date +%Y%m%d%H) 3600 3600 86400 120
+\$NS 600 ns.lingeek.nl
+###################################################################################
+$(cat $destdir/AS*.ipv6.rbldnsd)
+###################################################################################
+EOF
+
+# > $destdir/asn.v4.rbldnsd
+#	cat $destdir/AS*.ipv6.rbldnsd > $destdir/asn.v6.rbldnsd
+
+# Create copy to working dir
+cd $ASN_ZONES/rbldnsd
+echo "Copying from $(pwd) to working dir $RBLDNSD_WORK_DIR:"
+cp -f asn.lingeek.nl.generic asn4.rbldnsd asn6.rbldnsd $RBLDNSD_WORK_DIR
+
+popd
+
+exit
+
+############# Old script below ###################
+
+# temp exit for debug
+	if [ $totv6 != 0 ]; then
+	    ipv6count=0
+	    asnipv6total=$totv6
+	    ipv6teller=0
+	    cat<<EOF>$destdir/AS$i.ipv6.rbldnsd
+#####################################################################
+# AS$i - $provider, $country (Total IPv6:$asnipv6total)
+#####################################################################
+\$0 $country - AS$i - $provider
+EOF
+#$i				IN	TXT	"$provider"
+#EOF
+	    #echo "				IN	TXT	\"$j\"" >> AS$i.ipv6.zone
+	    for j in $(cat $tmpdir/AS$i.ipv6.rbldnsd)
+	    do
+		((ipv6teller++))
+		v6cidr=$(echo $j|cut -d'/' -f2)
+		ipv6count=$(echo "2^(128-$v6cidr)"|bc -l)
+#"
+		v6ip=$(echo $j|sed 's/\/.*//')
+		revipv6=$($asnbin/revip $v6ip)
+		ipv6range=$(sipcalc $j | tail -n4 | cut -d'-' -f2 | awk '{$2=$2};1' | sed -e '/^.$/d;s/.$//')
+		ipv6start=$(echo $ipv6range| cut -d' ' -f1)
+		ipv6end=$(echo $ipv6range| cut -d' ' -f2)
+		revipv6bind="*.$($asnbin/revip $ipv6end | sed 's/[f.]*//')"
+		echo -n "++ $i ($ipv6teller/$asnipv6total) v6ip: $v6ip CIDR: $v6cidr" # Reverse: $revipv6bind Count: $ipv6count\x1B[0G"
+		#    ;#########################################################################
+		#    ;
+		#    ; 103.155.130.0/24 - AS9 -  CMU-ROUTER, US (256 ip adresses) at level 0
+		#    *.130.155.103   IN      A       127.0.0.0
+		#                                    IN      TXT     "US - AS9 -  CMU-ROUTER, US range (103.155.130.0/24 == 103.155.130.0 - 103.155.130.255)"
+		#echo ";$j" >> $destdir/AS$i.ipv6.zone
+		echo "$j " >> $destdir/AS$i.ipv6.rbldnsd
+		#echo $($ASN_BIN/v6range $j | cut -d' ' -f6-) >> $destdir/AS$i.ipv6.rbldnsd
+		#echo $revipv6bind|sed 's/.ip6.arpa./\t\tIN\tA\t127.0.0.'$asnlevel'/' >> $destdir/AS$i.ipv6.zone
+		#echo "				IN	TXT	\"$country - AS$i - $provider ($j == $ipv6start - $ipv6end)\"" >> $destdir/AS$i.ipv6.zone
+		#if [ $ipv6count != 0 ] ; then
+		#    echo "#==================================================================================" >> $destdir/AS$i.ipv6.rbldnsd
+		#    echo "#Total for $j : $ipv6count" >> $destdir/AS$i.ipv6.rbldnsd
+		#    echo "#==================================================================================" >> $destdir/AS$i.ipv6.rbldnsd
+		#fi
+		ipv6total=$(echo "$ipv6total+$ipv6count"|bc -l)
+		echo -e -n " ** Total ip count: $ipv6total\x1B[0G"
+	    done
+	    echo
+	    echo "#" >> $destdir/AS$i.ipv6.rbldnsd
+	    #echo "; $ipv6total out of $(echo 2^128|bc -l)"
+	    echo "#The total percent of IPv6 for this AS that are blocked ("`echo "scale=16; ($ipv6total / (2^128)) * 100" | bc -l`"%) scale 16" >> $destdir/AS$i.ipv6.rbldnsd
+	    echo "#" >> $destdir/AS$i.ipv6.rbldnsd
+	else
+	    echo "#####################################################################" >> $destdir/AS$i.ipv6.rbldnsd
+	fi # end of test for ipv6
+    fi # End ipv6 generate
+
+    if ( test -f $destdir/AS$i.ipv4.rbldnsd ); then
+	echo "($ipv6teller/$asnipv6total) AS$i IPv4 Already done"
+    else
+	#echo "/var/named/chroot/var/named/blacklists/ipv4.new $tmpdir/AS$i.bind.ipv4.tpl $tmpdir/AS$i.ipv4.zone"
+	#cat $tmpdir/AS$i.bind.ipv4.tpl
+	#######################################################################
+# AS$i - $provider, $country
+#######################################################################
+#Total networks: $networks
+#Total IPv4: $totv4
+#######################################################################
+\$0 AS$i - $provider, $country
+	#/var/named/chroot/var/named/blacklists/ipv4.new $tmpdir/AS$i.ipv4.rbldnsd $tmpdir/AS$i.ipv4.zone
+	cp -p -u $tmpdir/AS$i.ipv4.zone $destdir/AS$i.ipv4.rbldnsd
+	# Not exists yet
+	#	/var/named/chroot/var/named/blacklists/ipv6.new $tmpdir/AS$i.bind.ipv6.tpl AS$i.ipv6.zone
+	rm $tmpdir/AS$i.ipv4.rbldnsd
+	echo
+	#echo "Press key for next AS number"; read -N1 input
+    fi
+
+done
+echo
+
+exit
+
+# Some cleanup
+cat<<EOF>$tmpdir/asn.lingeek.nl.zone2
+$(head -n15 $destdir/asn.lingeek.nl.zone)
+
+$(head -n5 $destdir/AS*.ipv4.zone | grep 'TXT' | grep '^[A-Z]\|^[1-9]' | grep -v '.v4\|==' | sort -u -V)
+
+$(tail -n2 $destdir/asn.lingeek.nl.zone)
+EOF
+#$(cat $destdir/AS*.ipv4.zone | grep 'TXT' | grep '^[A-Z]\|v4' | sed 's/.v4//' | sort -u -V)
+
+# Freeze dynamic dns zones (Need root and properly configured bind keys)
+#rndc freeze asn.lingeek.nl
+
+cat $destdir/*.ipv4.zone | sed '/^;/d;/^[A-Z]/d' | grep -E -v '^[0-9]{1,6}\ ' | sed '/^;/d' > $tmpdir/asn4.zone
+#cat $destdir/*.ipv4.zone | sed '/^;/d' | grep '[/].*\|127.0.0' > $destdir/asn4.zone
+cat $destdir/*.ipv6.zone | sed '/^;/d' > $tmpdir/asn6.zone
+
+chown named:named $destdir/asn.lingeek.nl.*
+cp -p -u $tmpdir/asn.lingeek.nl.zone2 /var/named/chroot/var/named/dynamic/asn.lingeek.nl.zone
+chown named:named $tmpdir/asn?.zone
+cp -p -u $tmpdir/asn?.zone /var/named/chroot/var/named/asn
+
+# Reload named service with latest asn zone files
+#service named force-reload
+#rndc thaw asn.lingeek.nl
+
+#/var/named/chroot/var/named/blacklists/ipv4.new ASN-tpl.zone
+
+popd
+
+#} # End timer

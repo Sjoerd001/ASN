@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# Info:
+# https://unix.stackexchange.com/questions/132779/how-to-read-an-ip-address-backwards
+#if [ ! -z $1 ]; then
+#    revip=$(dig -x $1 | egrep '^;.*PTR$' | cut -c 2- | awk '{print $1}')
+#    echo "dig: $revip"
+#fi
+#Or:
+#revip=$(host -t ptr $1 | cut -d' ' -f 2)
+#echo "host: $revip"
+
+# script file name revip
+if [ -z $1 ] || [ "help" == $1 ]; then
+    echo 'Convert a full ipv4 or ipv6 address to arpa notation'
+    echo "usage:"
+    echo $0 "help"
+    echo $0 "ipv4 address format: xxxx.xxxx.xxxx.xxxx"
+    echo $0 "ipv6 address format: xxxx:xxxx:xxxx:xxxx::xxxx"
+    echo "examples:"
+    echo $0 216.58.207.35
+    echo $0 2a00:1450:4001:824::2003
+    exit
+fi
+
+# if ip address passed containing ':'
+if [[ $1 = *':'* ]]; then
+    # invert ipv6 address e.g.: 2a00:1450:4001:824::2003 to 3.0.0.2.0.0.0.0.0.0.0.0.0.0.0.0.4.2.8.0.1.0.0.4.0.5.4.1.0.0.a.2.
+    # @see lsowen https://gist.github.com/lsowen/4447d916fd19cbb7fce4
+    echo "$1" | awk -F: 'BEGIN {OFS=""; }{addCount = 9 - NF; for(i=1; i<=NF;i++){if(length($i) == 0){ for(j=1;j<=addCount;j++){$i = ($i "0000");} } else { $i = substr(("0000" $i), length($i)+5-4);}}; print}' | rev | sed -e "s/./&./g" | echo "$(</dev/stdin)ip6.arpa."
+else
+    # invert ipv4 address e.g.: 216.58.207.35 to 35.207.58.216.in-addr.arpa
+    # @see Stéphane Chazelas https://unix.stackexchange.com/questions/132779/how-to-read-an-ip-address-backwards
+    echo $(printf %s "$1." | tac -s.)in-addr.arpa
+fi

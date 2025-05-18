@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Function to convert an IPv4 address to binary
+ipv4_to_bin() {
+    IFS='.' read -r a b c d <<< "$1"
+    printf '%d.%d.%d.%d\n' $(echo "ibase=2;$a;$b;$c;$d" | bc | sed 's/.\{8\}/& /g')
+}
+
+# Function to calculate the CIDR notation for an IPv4 address
+calculate_ipv4_cidr() {
+    bin_addr=$(ipv4_to_bin "$1")
+    addr=$(echo $bin_addr | awk -F. '{ print ($1 * 16777216) + ($2 * 65536) + ($3 * 256) + $4 }')
+
+    for i in {31..0}; do
+        mask=$((0xffffffff << (32 - $i)))
+        if (( $(($addr & $mask)) == $addr )); then
+            echo "$1 is a /$i CIDR block for IPv4"
+            return
+        fi
+    done
+
+    echo "Invalid IPv4 address: $1"
+}
+
+# Main program
+if [[ $# -eq 1 ]]; then
+    calculate_ipv4_cidr "$1"
+else
+    echo "Usage: $0 <ip_address>"
+fi

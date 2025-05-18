@@ -1,0 +1,251 @@
+#!/bin/bash
+
+_getip4()
+{
+    cat "$1" | grep -E -o '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | sort -V
+}
+
+_getip6()
+{
+    cat "$1" | egrep '(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]).){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]).){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))'
+}
+
+_ip4val()
+{
+# grep with IPv4 validation
+grep -E -o "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
+}
+
+_ip6val()
+{
+# grep with IPv6 validation
+grep -E -o "(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))"
+}
+
+_revip()
+{
+    # if ip address passed containing ':'
+    if [[ $1 = *':'* ]]; then
+	# invert ipv6 address e.g.: 2a00:1450:4001:824::2003 to 3.0.0.2.0.0.0.0.0.0.0.0.0.0.0.0.4.2.8.0.1.0.0.4.0.5.4.1.0.0.a.2.
+        # @see lsowen https://gist.github.com/lsowen/4447d916fd19cbb7fce4
+	echo "$1" | awk -F: 'BEGIN {OFS=""; }{addCount = 9 - NF; for(i=1; i<=NF;i++){if(length($i) == 0){ for(j=1;j<=addCount;j++){$i = ($i "0000");} } else { $i = substr(("0000" $i), length($i)+5-4);}}; print}' | rev | sed -e "s/./&./g" | echo "$(</dev/stdin)ip6.arpa."
+    else
+	# invert ipv4 address e.g.: 216.58.207.35 to 35.207.58.216.in-addr.arpa
+	# @see Stéphane Chazelas https://unix.stackexchange.com/questions/132779/how-to-read-an-ip-address-backwards
+	echo $(printf %s "$1." | tac -s.)in-addr.arpa
+    fi
+}
+
+#
+# https://github.com/chmduquesne/wg-ip
+#
+# helper to convert hex to dec (portable version)
+hex2dec(){
+    for i in $(echo "$@"); do
+	printf "%d\n" "$(( 0x$i ))"
+    done
+#    [ "$1" != "" ] && printf "%d" "$(( 0x$1 ))"
+}
+
+# expand an ipv6 address
+expand_ipv6() {
+    ip=$1
+
+    # prepend 0 if we start with :
+    echo $ip | grep -qs "^:" && ip="0${ip}"
+
+    # expand ::
+    if echo $ip | grep -qs "::"; then
+	colons=$(echo $ip | sed 's/[^:]//g')
+        missing=$(echo ":::::::::" | sed "s/$colons//")
+        expanded=$(echo $missing | sed 's/:/:0/g')
+        ip=$(echo $ip | sed "s/::/$expanded/")
+    fi
+
+    blocks=$(echo $ip | grep -o "[0-9a-f]\+")
+    set $blocks
+
+    printf "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n" \
+	$(hex2dec $@)
+        #<----->$(hex2dec $1) \
+        #        $(hex2dec $2) \
+        #        $(hex2dec $3) \
+        #        $(hex2dec $4) \
+        #        $(hex2dec $5) \
+        #        $(hex2dec $6) \
+        #        $(hex2dec $7) \
+        #        $(hex2dec $8)
+}
+
+# returns a compressed ipv6 address under the form recommended by RFC5952
+compress_ipv6() {
+    ip=$1
+
+    blocks=$(echo $ip | grep -o "[0-9a-f]\+")
+    set $blocks
+
+    # compress leading zeros
+    ip=$(printf "%x:%x:%x:%x:%x:%x:%x:%x\n" \
+	$(hex2dec $@)
+        #<----->$(hex2dec $1) \
+        #        $(hex2dec $2) \
+        #        $(hex2dec $3) \
+        #        $(hex2dec $4) \
+        #        $(hex2dec $5) \
+        #        $(hex2dec $6) \
+        #        $(hex2dec $7) \
+        #        $(hex2dec $8)
+    )
+
+    # prepend : for easier matching
+    ip=:$ip
+
+    # :: must compress the longest chain
+    for pattern in :0:0:0:0:0:0:0:0 \
+		    :0:0:0:0:0:0:0 \
+		    :0:0:0:0:0:0 \
+            	    :0:0:0:0:0 \
+                    :0:0:0:0 \
+                    :0:0:0 \
+                    :0:0; do
+	if echo $ip | grep -qs $pattern; then
+    	    ip=$(echo $ip | sed "s/$pattern/::/")
+            # if the substitution occured before the end, we have :::
+            ip=$(echo $ip | sed 's/:::/::/')
+            break # only one substitution
+        fi
+    done
+
+    # remove prepending : if necessary
+    echo $ip | grep -qs "^:[^:]" && ip=$(echo $ip | sed 's/://')
+
+    echo $ip
+}
+
+# test if the input is an ipv4
+is_ipv4(){
+    echo $1 | grep -qs "[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}" || return 1
+    for i in $(echo $1 | grep -o "[0-9]\+"); do
+	if [ "$i" -gt 255 ]; then
+	    return 1
+	fi
+    done
+    return 0
+}
+
+reverse_ipv4(){
+    local IFS
+    IFS=.
+    set -- $1
+    echo $4.$3.$2.$1
+}
+
+reverse_ipv6(){
+    expand_ipv6 $1
+    local IFS
+    IFS=.
+    set -- $1
+    echo $32.$31.$30.$29.$28.$27.$26.$25.$24.$23.$22.$21.$20.$19.$18.$17.$16.$15.$14.$13.$12.$11.$10.$9.$8.$7.$6.$5.$4.$3.$2.$1
+}
+
+is_ipv6(){
+    expanded="$(expand_ipv6 $1)"
+    [ "$1" = "$expanded" ] && return 0
+    compressed="$(compress_ipv6 $expanded)"
+    [ "$1" = "$compressed" ] && return 0
+    #echo "input:      $1" >> /dev/stderr
+    #echo "expanded:   $expanded" >> /dev/stderr
+    #echo "compressed: $compressed" >> /dev/stderr
+    return 1
+}
+
+# test if the input is an ip (any type)
+is_ip(){
+    is_ipv4 $1 && return 4
+    is_ipv6 $1 && return 6
+    return 1
+}
+
+__rfc5952_expand() {
+    read addr mask < <(IFS=/; echo $1)
+    quads=$(grep -oE "[a-fA-F0-9]{1,4}" <<< ${addr/\/*} | wc -l)
+    #[ "${addr:${#addr}-1}" == ":" ] && { addr="${addr}0000"; (( quads++ )); }
+    grep -qs ":$" <<< $addr && { addr="${addr}0000"; (( quads++ )); }
+    grep -qs "^:" <<< $addr && { addr="0000${addr}"; (( quads++ )); }
+    [ $quads -lt 8 ] && addr=${addr/::/:$(for (( i=1; i<=$(( 8 - quads )) ; i++ )); do printf "0000:"; done)}
+    #addr=$(
+    #for quad in $(IFS=:; echo ${addr}); do
+    #    [ "${#quad}" -lt 4 ] && for (( i=${#quad}; i<4 ; i++ )); do quad=0${quad}; done
+    #    printf "${delim}${quad}"; delim=":";
+    # Or so if you need result without colon, as asked in first post
+    #   printf "${quad}";
+    #done)
+    addr=$(for quad in $(IFS=:; echo ${addr}); do printf "${delim}%04x" "0x${quad}"; delim=":"; done)
+    #addr=$(for quad in $(IFS=:; echo ${addr}); do printf "%04x" "0x${quad}"; done)..
+    [ ! -z $mask ] && echo $addr/$mask || echo $addr
+}
+
+__rfc5952_compact() {
+    read addr mask < <(IFS=/; echo $1)
+    addr=$(for quad in $(IFS=:; echo ${addr}); do printf "${delim}%x" "0x${quad}"; delim=":"; done)
+    for zeros in $(grep -oE "((^|:)0)+:?" <<< $addr | sort -r | head -1); do addr=${addr/$zeros/::}; done
+    [ ! -z $mask ] && echo $addr/$mask || echo $addr
+}
+
+_ip6_expand() {
+    __rfc5952_expand $1
+}
+
+_ip6_compress() {
+    __rfc5952_compact $1
+}
+
+_and() {
+    echo $(($1&$2))
+}
+
+_or() {
+    echo $(($1|$2))
+}
+
+_xor() {
+    echo $(($1^$2))
+}
+
+_shift_r() {
+    echo $(($1>>$2))
+}
+
+_shift_l() {
+    echo $(($1<<$2))
+}
+
+_ascii2unicode() {
+    echo "$1" | sed 's/\(.\)/\1\n/g' | awk '/^.$/{ printf("%c%c",0,$0) }'
+}
+
+_urlencode() {
+    echo -n "$1" | xxd -p | tr -d '\n' | sed 's/\(..\)/%\1/g'
+}
+
+_urldecode() {
+    tr -d '%' <<< "$1" | xxd -r -p
+}
+
+_ascii2unicode() {
+    echo "$1" | sed 's/\(.\)/\1\n/g' | awk '/^.$/{ printf("%c%c",0,$0) }'
+}
+
+_subnetcalc() {
+    echo -n "$1" | \
+    awk 'BEGIN { FS="." ; printf("obase=2;ibase=A;") } { printf("%s;%s;%s;%s;\n",$1,$2,$3,$4) }' | \
+    bc | sed 's/^0$/00000000/g;s/\(.\)/\1\n/g' | \
+    awk 'BEGIN { ht = 0; nt = 0; }
+    /[01]/ { if ($0=="1") nt++; if ($0=="0") ht++; }
+    END { printf("Network bits: %s\nHost bits: %s\nHost IP Count: %d\n",nt,ht,2^ht); }'
+}
+
+# https://stackoverflow.com/questions/1305237/how-to-list-variables-declared-in-script-in-bash
+_getcurrentvars() {
+    eval "printf '%q\n' $(printf ' "${!%s@}"' _ {a..z} {A..Z})"
+}

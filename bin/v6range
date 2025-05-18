@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Source config
+. /etc/ASN/asn.conf
+# Default directory settings
+#ASN_DEBUG=0
+#ASN_TEMP="/dev/shm"
+#ASN_BASE=/etc/ASN
+#ASN_SOURCE=$ASN_BASE/source
+#ASN_TPL=$ASN_BASE/tpl
+#ASN_TABLE=$ASN_BASE/table
+#ASN_PROVIDER=$ASN_BASE/provider
+#ASN_BIN=$ASN_BASE/bin
+#ASN_WHOIS=$ASN_BASE/whois
+#ASN_COUNTRY=$ASN_BASE/country
+#ASN_ZONES=$ASN_BASE/zones
+
+# Tool for doing ip calculations
+ipcalcbin=sipcalc
+
+# Source function lib
+. $ASN_BASE/asnfunctions
+# Functions used:
+#_revip()		Calculate reverse ip address
+
+# Testips
+#ip6="2a02:a213:a6bf:b080::ee01/114"
+#ip6="2a02:a204:0:74d:25af:247e:7e8a:849/101"
+#ip6="2600:3c01::f03c:92ff:fe8d:596e/28"
+
+[ ! ${#@} == 0 ] && ip6=$1
+
+DEBUG=$ASN_DEBUG
+
+[ ! $DEBUG ] && echo "DEBUG Processing:$ip6"
+
+# Check for CIDR range
+ipcidr=${ip6#*/}
+[ ! 1 -le $ipcidr ] && [ ! $cidr -le 128 ] && ipcidr="128" && ip6="$ip6/128"
+#echo $ip6 , $ipcidr
+#exit
+ip6=${ip6^^} # Change everything to uppercase
+sipinfo=$($ipcalcbin "$ip6") # Get info from sipcalc?
+tuples=$(echo "((128-$ipcidr)/4)"|bc) #"
+ipstart=$(echo $sipinfo|cut -d' ' -f44)
+ipend=$(echo $sipinfo|cut -d' ' -f46)
+[ ! $DEBUG == 0 ] && echo "DEBUG Tuples:$tuples"
+[ ! $DEBUG == 0 ] && echo "DEBUG Start:$ipstart, End:$ipend, CIDR:$ipcidr"
+revstart=$(_revip $ipstart)
+revend=$(_revip $ipend)
+tuples=$(echo "$tuples*2"|bc)
+cstart=$((16#${revstart:$tuples:1}))
+cend=$((16#${revend:$tuples:1}))
+for (( i=$cstart; i<=$cend; ))
+do
+    revtemp=$(printf '%x' $i).$(echo ${revstart:$tuples+2}|sed 's/.ip6.arpa.//')
+    wildcrd="*."
+    if [ $ipcidr -ge 124 ]; then
+	wildcrd=""
+    fi
+#    echo "$wildcrd${revtemp}		IN	A	127.0.0.0"
+#    echo "$wildcrd${revtemp}		IN	TXT	\"${ip6,,} range ($ipstart - $ipend)\""
+    printf "%-64sIN TXT \"%s range (%s - %s)\"\n" $wildcrd${revtemp} ${ip6,,} $ipstart $ipend
+    ((i++))
+done
