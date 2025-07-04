@@ -1,0 +1,161 @@
+#!/bin/bash
+
+# Create work file
+cp -f /etc/ASN/asns.csv /etc/ASN/asns.txt
+# Remove first line from asns.txt
+sed -i '1,1d' /etc/ASN/asns.txt
+# Remove last 2 lines from same file
+sed -i -n -e :a -e '1,2!{P;N;D;};N;ba' /etc/ASN/asns.txt
+# Remove all "
+sed -i 's/"//g' /etc/ASN/asns.txt
+# Remove ERR_AS_NAME_NOT_FOUND lines
+sed -i '/ERR_AS_NAME_NOT_FOUND/d' /etc/ASN/asns.txt
+
+################################################################
+# Define some routine funcions
+################################################################
+
+__loadipset() {
+while read -a fields;
+# fields[0] contains ip address
+# fields[1] contains as number
+do
+#    echo "(${#test[*]})${fields[1]} == ${fields[0]}"
+    as_ip_array[${fields[1]}]+="${fields[0]} "
+#    echo ${test[${fields[1]}]}
+done < ../table.test
+}
+
+__printinfo() {
+locnr=$1
+#$(</dev/stdin)
+echo "S1=$1 Sasnr=$asnr S@=$@ locnr=$locnr"
+echo "${infolines["$locnr"]}"
+}
+
+__printips() {
+locnr=$1
+#$(</dev/stdin)
+echo "S1=$1 Sasnr=$asnr S@=$@ locnr=$locnr"
+echo "AS number contains ${as_ip_array[$locnr]} ip's"
+for i in as_ip_array[$locnr]
+do
+    echo $i
+done
+}
+
+__loadasninfo() {
+
+#test='AS1,"Level 3 Parent, LLC",Unknown,US'; echo $test | sed -n 1'p' | tr ',' '\n' | while read word; do printf "Word='%s'\n" "${word}"; done
+#local asnnr field1 field2 field3 field4
+#IFS=, read -r -a test <<< 'AS1,"Level 3 Parent, LLC",Unknown,US'
+
+IFS=,
+while IFS=, read -a fields
+    do
+	asnr=${fields[0]:2}
+	if [ "${#fields[@]}" = "4" ]; then
+	    infolines["$asnr"]="AS$asnr - ${fields[1]}, ${fields[3]}"
+#	    echo "${infolines["$asnr"]}"
+	else
+	    infolines["$asnr"]="AS$asnr - ${fields[1]}, ${fields[2]}, ${fields[4]}"
+#	    echo "${infolines["$asnr"]}"
+	fi
+    done < ../asns.test
+}
+
+declare -A as_ip_array
+declare -A infoline
+
+__loadasninfo
+__loadipset
+
+asnr="14061"
+
+echo "${as_ip_array["$asnr"]}"
+
+__printinfo $asnr
+__printips $asnr
+
+#exit
+
+cat<<EOF>AS$asnr
+Informations for $(__printinfo $asnr)
+$(__printips $asnr | wc -l) Networks are assigned to you.
+Networks of your Allocation
+Networks Status Level 1 listed abusers
+within the last 7 days Impacts in this net
+within the last 7 days Level 2 Escalation limit
+by Impacts Optional express delisting
+WARNING!
+$(__printips $asnr)
+EOF
+
+echo "Test out"
+echo "Informations $(__printinfo $asnr)"
+echo "$(__printips $asnr | wc -l) total networks assigned"
+echo "$(__printips $asnr)"
+
+
+#__printinfo
+#__printips
+
+
+echo "Latest as nr: $asnr"
+
+exit
+
+asnlist=($(cat ../asns.txt | cut -d',' -f1 | sed 's/^AS//'))
+IFS=','
+infolines=($(cat ../asns.txt))
+IFS=
+asntotal=${#asnlist[*]}
+echo $asntotal
+echo ${infolines[1]}
+#for i in ${asnlist[@]}; do
+#echo $i
+#done
+
+#echo "${infolines[@]}"
+# | grep 'AS'$i',' | printf "%s - %s, %s" AS$i $(awk 'BEGIN{FS=","} {print $2} {print $4}')`
+
+#declare -A infolines
+#while IFS=, read field1 field2 field3 field4
+#do
+#    infolines[$field1]=($field2 $field4)
+#echo ${infolines[1]}
+#done < ../asns.txt
+
+exit
+
+
+for i in $asnlist; do
+#    cidrip=`cat -E ../table.txt | grep ' '$i'\$' | sed 's/ '$i'\$//'`
+    infoline="Informations for "`cat ../asns.txt | grep 'AS'$i',' | printf "%s - %s, %s" AS$i $(awk 'BEGIN{FS=","} {print $2} {print $4}')`
+echo $infoline
+echo "${#ipcount[*]} networks are assigned to you."
+echo $cidrip
+done
+
+# declare -A asns()
+#set -f
+#while IFS=, read field1 field2 field3 field4
+#    do
+#    # asn,asns=($(<../asns.txt))
+#    echo "Informations for $field1 - $field2, "$field4
+#    echo "Informations for $field1 - $field2, "$field4 > $field1
+#    asnnr=${field1: 2}
+#    echo "ASN NR: $asnnr"
+#    ipcount=0
+#    for i in $(cat -A ../table.txt | grep ' '$asnnr'\$' | cut -d' ' -f1 | sed -r 's/.{1}$//')
+#    do
+#	((ipcount++))
+#	#echo "Total ips: $(echo $iplist | wc -l)"
+#	#echo "$(echo $iplist | wc -l) Networks are assigned to you." >> $field1
+#	echo $i >> $field1
+#	#.AS:$field1 Prov: $field2 Own: $field3 Country: $field4"
+#    done
+#done < ../asns.txt
+#echo "$ipcount Networks are assigned to you." >> $field1
+#set +f
+#declare -p asns
